@@ -5,22 +5,13 @@ import re
 
 def _improved_include_statement(block_start, block_end):
     return re.compile(fr"""
-        (^ .*)  # first group: greedy tokens at the beginning of the line
-        (?= # second group: positive lookahead of pattern
-            (
-                {re.escape(block_start)}
-                (?P<block_start_modifier> [\+|-]?)
-                (?P<statement>
-                    \s* include \b   # include keyword
-                    \s*? .*?  # fluff
-                    indent \s content  # new 'with indentation' option
-                    \s*? .*? # fluff
-                )
-                (?P<block_end_modifier> [\+|-]?)
-                {re.escape(block_end)}
-            )
-        )
-        .* $ # rest of the line, required to also include the lookahead in the match
+        (?P<lead> ^ .*)  # first group: greedy tokens at the beginning of the line
+        {re.escape(block_start)}
+        (?P<block_start_modifier> [\+|-]?)
+        \s* indented-include \b   # keyword
+        (?P<statement_args> .*? )
+        (?P<block_end_modifier> [\+|-]?)
+        {re.escape(block_end)}
         """,
         flags=re.MULTILINE|re.VERBOSE)
 
@@ -28,6 +19,16 @@ def _improved_include_statement(block_start, block_end):
 class MultiLineInclude(Extension):
 
     def preprocess(self, source, name, filename=None):
+        """Swap out includes that have our additional command.
+
+        We look in the template for indented-include directives, and
+        swap them out for a chunk of text that includes the whitespace
+        at the start of the line preceding the directive.
+
+        This will not allow non-whitespace before the include
+        directive; it will also not allow multiple 'indented-include'
+        directives on the same line. TODO test
+        """
         env: Environment = self.environment
 
         block_start: str = env.block_start_string
@@ -36,33 +37,36 @@ class MultiLineInclude(Extension):
         re_newline = re.compile('\n')
 
         def add_indentation_filter(match):
-            line_content_before_statement = match.group(1)
-            statement = match.group('statement').replace('indent content', '')  # strip 'with indentation' directive
+            lead = match.group('lead')
+            statement_args = match.group('statement_args')
 
             # guard against invalid use of improved include statement
-            if line_content_before_statement is not None:
-                # line before include statement must be empty or indentation only
-                if not line_content_before_statement == '' and not line_content_before_statement.isspace():
-                    start_position = match.start(0)
-                    lineno = len(re_newline.findall(source, 0, start_position)) + 1
-                    raise TemplateSyntaxError(
-                        "line contains non-whitespace characters before include statement",
-                        lineno,
-                        name,
-                        filename,
-                    )
+            # line before include statement must be empty or indentation only
+            if lead != '' and not lead.isspace():
+                start_position = match.start('lead')
+                lineno = len(re_newline.findall(source, 0, start_position)) + 1
+                raise TemplateSyntaxError(
+                    "line contains non-whitespace characters before include statement",
+                    lineno,
+                    name,
+                    filename,
+                )
 
-            indentation = line_content_before_statement or ''
-            block_start_modifier = match.group('block_start_modifier') or ''
-            block_end_modifier = match.group('block_end_modifier') or ''
+            block_start_modifier = match.group('block_start_modifier')
+            block_end_modifier = match.group('block_end_modifier')
 
-            # Note that 'indentation' consists only of whitespace, so
+            # Note that 'lead' consists only of whitespace, so
             # there's no Bobby Tables here where it is trying to be a
             # Jinja2 command
-            start_filter = indentation + f'{block_start + block_start_modifier} filter indent("{indentation}") -{block_end}'
-            include_statement = indentation + f'{block_start} {statement} {block_end}'
-            end_filter = indentation + f'{block_start}- endfilter {block_end_modifier + block_end}'
 
-            return'\n'.join([start_filter, include_statement, end_filter])
+            # Note that we have to indent the first line; subsequent
+            # lines are indented using the filter, but the leadin is
+            # not.
+            start_filter = lead + f'{block_start + block_start_modifier} filter indent("{lead}") {block_end}'
+            include_statement = f'{block_start} include {statement_args} {block_end}'
+            end_filter = f'{block_start} endfilter {block_end_modifier + block_end}'
+
+            print(start_filter + include_statement + end_filter)
+            return start_filter + include_statement + end_filter
 
         return pattern.sub(add_indentation_filter, source)

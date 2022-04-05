@@ -26,6 +26,12 @@ def test_include_no_leadin(environment):
     assert template.render() == "hello:\n    world"
 
 
+def test_include_with_whitespace(environment):
+    """Test that anything following on the line is kept."""
+    template = environment.get_template("trailing.j2")
+    assert template.render() == "example:\n    hello:\n        worldtrailing"
+
+
 def test_include_tabbed_leadin(environment):
     template = environment.get_template("tabbed-leadin.j2")
     assert template.render() == "example:\n\t    hello:\n\t        world"
@@ -33,6 +39,6 @@ def test_include_tabbed_leadin(environment):
 
 def test_include_bad_leadin(environment):
     with pytest.raises(TemplateSyntaxError) as excinfo:
-            template = environment.get_template("bad-leadin.j2")
+        template = environment.get_template("bad-leadin.j2")
 
     assert "line contains non-whitespace characters before include statement" in str(excinfo.value)
